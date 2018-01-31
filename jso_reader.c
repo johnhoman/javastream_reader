@@ -172,7 +172,6 @@ get_value(FILE *fd, Handles *handles, char tc_num)
             assert(n_bytes == 1);
             n_bytes = fread(value, 1, 1, fd);
             assert(n_bytes == 1);
-
             ob = PyUnicode_FromString(value);
             break;
 
@@ -449,6 +448,7 @@ parse_tc_object(FILE *fd, Handles *handles)
         }
         default:
             fprintf(stderr, "Typecode 0x%x not implemented\n", next_typecode);
+            exit(1);
             Py_INCREF(Py_None);
             data = Py_None;
     }
