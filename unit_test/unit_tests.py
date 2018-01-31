@@ -4,10 +4,12 @@
 
 import unittest
 from numpy import allclose
+from pprint import pprint
 from math import pow
 from jso_reader import (
     _test_parse_primitive_array, 
     _test_parse_class_descriptor,
+    stream_read
 )
 
 class TestParsePrimitiveArray(unittest.TestCase):
@@ -133,7 +135,7 @@ class TestParsePrimitiveArray(unittest.TestCase):
             [[0.2343134, 1234132.3431, 312431.3, 0, 1.1234],
             [1.2343134, 12342.003431, 31431.3, 0, 10.1234]]
         ]
-        print(from_file)
+
         self.assertEqual(from_file, expected)
 
 
@@ -142,8 +144,21 @@ class TestParsePrimitiveWrappers(unittest.TestCase):
     def test_class_descriptor_java_lang_Double(self):
         filename = "primitive_wrappers/double_wrapper.ser"
         from_file = _test_parse_class_descriptor(filename)
-        print(from_file)
+        expected = {"value": 10}
 
+        self.assertDictEqual(from_file, expected)
+
+    def test_class_descriptor_java_lang_String(self):
+        filename = "primitive_wrappers/string_single_sentence.ser"
+        print(filename)
+        from_file = _test_parse_class_descriptor(filename)
+        
+        self.assertEqual(from_file, "This is a string that I am saving to a .ser file")
+
+    def test_class_descriptor_simple_class(self):
+        filename = "../person4.ser"
+        from_file = stream_read(filename)
+        pprint(from_file)
 
 
 if __name__ == '__main__':

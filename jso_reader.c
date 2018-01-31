@@ -12,9 +12,7 @@
  * */
 
 
-static uint8_t type_code;
 static uint8_t little_endian;
-static uint32_t next_handle;
 
 static PyObject *
 java_stream_reader(PyObject *self, PyObject *args)
@@ -33,7 +31,6 @@ java_stream_reader(PyObject *self, PyObject *args)
     /* test endianness big_endian -> 0x0001, little_endian ->0x0100*/
     uint8_t i = 0x0001;
     little_endian = *((char *)&i);
-    next_handle = 0x7e0000;
 
     if (!little_endian){
         return PyErr_NewException("Not Implemented for big endian", NULL, NULL);
@@ -87,23 +84,23 @@ parse_stream(FILE *fd, Handles *handles, JavaType_Type *type)
     n_bytes = fread(&tc_typecode, 1, 1, fd);
     assert(n_bytes == 1);
 
+    printf("first typecode 0x%x\n", tc_typecode);
+
     switch(tc_typecode){
         case TC_ENUM:
             Py_INCREF(Py_None);
             return Py_None;
         case TC_ARRAY:
-            printf("tc_array_subarray_reached\n");
             return parse_tc_array(fd, handles);
         case TC_CLASS:
             Py_INCREF(Py_None);
             return Py_None;
-        case TC_STRING:
-        case TC_OBJECT:
-            
-
-            Py_INCREF(Py_None);
-            return Py_None;
         case TC_LONGSTRING:
+            return parse_tc_longstring(fd, handles, NULL);
+        case TC_STRING:
+            return parse_tc_shortstring(fd, handles, NULL);
+        case TC_OBJECT:
+            return parse_tc_object(fd, handles);
         case TC_PROXYCLASSDESC:
         case TC_CLASSDESC:
             return parse_tc_classdesc(fd, handles, type);
@@ -274,7 +271,6 @@ get_value(FILE *fd, Handles *handles, char tc_num)
 
             ob = PyLong_FromLong((long)value);
 
-
             break;
         }
         case 'Z': {
@@ -335,13 +331,41 @@ get_field_descriptor(FILE *fd, Handles *handles)
     switch(field_tc){
         case '[':
         case 'L': {
-
             char classname_tc;
             n_bytes = fread(&classname_tc, 1, 1, fd); 
             assert(n_bytes == 1);
-            assert(classname_tc == TC_STRING || classname_tc == TC_LONGSTRING);
+            printf("typecode = 0x%x\n", classname_tc);
+            assert(classname_tc == TC_STRING 
+            || classname_tc == TC_LONGSTRING 
+            || classname_tc == TC_REFERENCE);
+            PyObject *str;
             classname = NULL;
-            parse_tc_string(fd, handles, classname);
+            if (classname_tc == TC_STRING) {
+                str = parse_tc_shortstring(fd, handles, classname);
+                Py_DECREF(str);
+            }
+            else if (classname_tc == TC_LONGSTRING) {
+                str = parse_tc_longstring(fd, handles, classname);
+                Py_DECREF(str);
+
+            } else if (classname_tc == TC_REFERENCE) {
+                JavaType_Type *ref_string;
+                uint32_t handle;
+
+                n_bytes = fread(&handle, 1, 4, fd);
+                assert(n_bytes == 4);
+
+                if (little_endian) {
+                    uint32_reverse_bytes(handle);
+                }
+
+                ref_string = Handles_Find(handles, handle);
+                assert(ref_string != NULL);
+                assert(ref_string->jt_type == TC_STRING || ref_string->jt_type == TC_LONGSTRING);
+                
+                classname = ref_string->string;
+            }
+
             field->classname = classname;
             field->obj_typecode = field_tc;
             field->is_object = 1;
@@ -377,18 +401,34 @@ parse_tc_object(FILE *fd, Handles *handles)
     JavaType_Type *class_desc;
     PyObject *data;
     char next_typecode;
+    size_t n_bytes;
 
     next_typecode = fgetc(fd);
     ob = JavaType_New(TC_OBJECT);
     
 
     switch(next_typecode){
+        case TC_REFERENCE:
         case TC_CLASSDESC: {
             PyObject *__py_ob;
-            class_desc = JavaType_New(next_typecode);
-            __py_ob = parse_tc_classdesc(fd, handles, class_desc);
-            assert(__py_ob == Py_None);
+            if (next_typecode == TC_CLASSDESC) {
+                class_desc = JavaType_New(next_typecode);
+                __py_ob = parse_tc_classdesc(fd, handles, class_desc);
+                assert(__py_ob == Py_None);
+                Py_DECREF(__py_ob);
+            }
+            else {
+                uint32_t handle;
+                n_bytes = fread(&handle, 1, 4, fd);
+                assert(n_bytes == 4);
 
+                if (little_endian) {
+                    uint32_reverse_bytes(handle);
+                }
+                class_desc = Handles_Find(handles, handle);
+                assert(class_desc != NULL);
+                assert(class_desc->jt_type == TC_CLASSDESC);
+            }
             ob->class_descriptor = class_desc; 
             Handles_Append(handles, ob);
 
@@ -400,9 +440,10 @@ parse_tc_object(FILE *fd, Handles *handles)
             for (i = 0; i < class_desc->n_fields; i++) {
                 field = class_desc->fields[i];
                 value = get_value(fd, handles, field->jt_type);
-                printf("ref count before set_item_string %zu\n", Py_REFCNT(value));
+
                 PyDict_SetItemString(data, field->fieldname, value);
-                printf("ref count after set_item_string %zu\n", Py_REFCNT(value));
+                Py_DECREF(value); /* dictionary owns the value */
+
             }
             break;
         }
@@ -417,10 +458,55 @@ parse_tc_object(FILE *fd, Handles *handles)
 }
 
 static PyObject *
-parse_tc_string(FILE *fd, Handles *handles, char *dest)
+parse_tc_string(FILE *fd, Handles *handles, char *dest, size_t length)
 {
-    Py_INCREF(Py_None);
-    return Py_None;
+    JavaType_Type *str;
+    size_t n_bytes;
+
+    str = JavaType_New(TC_STRING);
+
+    char *string = (char *)malloc(length + 1);
+    string[length] = 0;
+    
+    str->string = string;
+    str->n_chars = length;
+
+    Handles_Append(handles, str);
+
+    n_bytes = fread(string, sizeof(char), length, fd);
+    assert(n_bytes == length);
+
+    return PyUnicode_FromString(string);
+}
+
+static PyObject *
+parse_tc_longstring(FILE *fd, Handles *handles, char *dest)
+{
+    uint64_t len;
+    size_t n_bytes;
+
+    n_bytes = fread(&len, 1, 8, fd);
+    if (little_endian)
+        uint64_reverse_bytes(len);
+    assert(n_bytes == 8);
+
+
+    return parse_tc_string(fd, handles, dest, (size_t)len);
+}
+
+static PyObject *
+parse_tc_shortstring(FILE *fd, Handles *handles, char *dest)
+{
+    uint16_t len;
+    size_t n_bytes;
+ 
+    n_bytes = fread(&len, 1, 2, fd);
+    if (little_endian){
+        uint16_reverse_bytes(len);
+    }
+    assert(n_bytes == 2);
+
+    return parse_tc_string(fd, handles, dest, (size_t)len);
 }
 
 static PyObject *
@@ -625,7 +711,6 @@ __test_parse_primitive_array(PyObject *self, PyObject *args)
 {  
     int i = 0x0001;
     little_endian = *((char *)&i);
-    next_handle = 0x7e0000;
     
    /*
     *
@@ -648,9 +733,7 @@ __test_parse_primitive_array(PyObject *self, PyObject *args)
     Handles *handles = Handles_New(DEFAULT_REFERENCE_SIZE);
     assert(handles != NULL);
 
-    n_bytes = fread(&type_code, 1, 1, fd);
-    assert(n_bytes == 1);
-    return parse_tc_array(fd, handles);
+    return parse_stream(fd, handles, NULL);
      
 }
 
@@ -659,7 +742,6 @@ __test_parse_class_descriptor(PyObject *self, PyObject *args)
 {
     int i = 0x0001;
     little_endian = *((char *)&i);
-    next_handle = 0x7e0000;
     
  
     char *filename;
@@ -679,14 +761,10 @@ __test_parse_class_descriptor(PyObject *self, PyObject *args)
 
     Handles *handles = Handles_New(DEFAULT_REFERENCE_SIZE);
     assert(handles != NULL);
-
-    n_bytes = fread(&type_code, 1, 1, fd);
-    assert(n_bytes == 1);
  
-    return parse_tc_object(fd, handles);
+    return parse_stream(fd, handles, NULL);
 
 }
-
 
 
 static PyMethodDef ReaderMethods[] = {

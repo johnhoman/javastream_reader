@@ -56,7 +56,13 @@ static PyObject *
 parse_tc_object(FILE *fd, Handles *handles);
 
 static PyObject *
-parse_tc_string(FILE *fd, Handles *handles, char *dest);
+parse_tc_string(FILE *fd, Handles *handles, char *dest, size_t string_length);
+
+static PyObject *
+parse_tc_longstring(FILE *fd, Handles *handles, char *dest);
+
+static PyObject *
+parse_tc_shortstring(FILE *fd, Handles *handles, char *dest);
 
 static PyObject *
 parse_tc_classdesc(FILE *fd, Handles *handles, JavaType_Type *type);
