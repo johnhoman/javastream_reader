@@ -1,7 +1,7 @@
 #define DEFAULT_REFERENCE_SIZE 200
 
 
-#define isinstance(a, b) (a)->jt_type == b
+#define isinstance(a, b) ((a)->jt_type == b)
 
 
 typedef struct JavaType_Type JavaType_Type;
@@ -18,7 +18,6 @@ typedef struct Handles Handles;
 
 struct JavaType_Type {
     int jt_type;
-    char tc_typecode;
     char prim_typecode;
     char obj_typecode;
     char *classname;
@@ -44,6 +43,7 @@ struct JavaType_Type {
     JavaType_Type **fields;
     JavaType_Type *class_annotation;
     JavaType_Type *super;
+    JavaType_Type *class_descriptor;
 };
 
 struct StreamReference {
@@ -55,6 +55,7 @@ struct Handles {
     size_t size;
     size_t index;
     size_t reserved;
+    uint32_t next_handle;
     StreamReference **stream;
 };
 
@@ -74,9 +75,12 @@ Handles_New(size_t size);
 uint8_t
 Handles_Destruct(Handles handles);
 
-uint8_t 
-Handles_Append(Handles handles, JavaType_Type *ob);
+void 
+Handles_Append(Handles *handles, JavaType_Type *ob);
 
 JavaType_Type *
-JavaType_New(intptr_t type);
+Handles_Find(Handles *handles, uint32_t handle);
+
+JavaType_Type *
+JavaType_New(char type);
 

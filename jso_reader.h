@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <wchar.h>
+#include "javatype.h"
 
 #define TC_NULL 0x70
 #define TC_REFERENCE 0x71
@@ -22,15 +23,6 @@
 
 /* const dict keys */
 
-#define JSize_INT 4
-#define JAVA_SIZE_LONG 8
-#define JSize_BYTE 1
-#define JSize_CHAR 2
-#define JSize_BOOL 1
-#define JSize_FLOAT 4
-#define JSize_SHORT 2
-#define JSize_DOUBLE 8
-
 #define uint16_switch(a) (((a) & 0xFF00) >> 8 | ((a) & 0x00FF) << 8)
 #define uint32_switch(a) \
    (((a) & 0xFF000000) >> 24 \
@@ -38,7 +30,7 @@
   | ((a) & 0x0000FF00) <<  8 \
   | ((a) & 0x000000FF) << 24)
 #define uint64_switch(a) \
-	(((a) & 0xFF00000000000000) >> 56 \
+	  (((a) & 0xFF00000000000000) >> 56 \
    | ((a) & 0x00FF000000000000) >> 40 \
    | ((a) & 0x0000FF0000000000) >> 24 \
    | ((a) & 0x000000FF00000000) >>  8 \
@@ -58,35 +50,31 @@ static PyObject *
 java_stream_reader(PyObject *self, PyObject *args);
 
 static PyObject *
-parse_stream(FILE *fd, PyObject *handles);
+parse_stream(FILE *fd, Handles *handles, JavaType_Type *);
 
 static PyObject *
-parse_tc_object(FILE *fd, PyObject *handles);
+parse_tc_object(FILE *fd, Handles *handles);
 
 static PyObject *
-parse_tc_string(FILE *fd, PyObject *handles);
+parse_tc_string(FILE *fd, Handles *handles, char *dest);
 
 static PyObject *
-parse_tc_classdesc(FILE *fd, PyObject *handles);
+parse_tc_classdesc(FILE *fd, Handles *handles, JavaType_Type *type);
 
 static PyObject *
-parse_tc_array(FILE *fd, PyObject *handles);
+parse_tc_array(FILE *fd, Handles *handles);
 
 static PyObject *
-get_values_from_class_descriptor(FILE *fd, PyObject *class_desc, char type);
+get_values_from_java_type(FILE *fd, PyObject *class_desc);
 
 static PyObject *
 get_value(FILE *fd, char tc_num);
 
-static PyObject *
-wrap_class_descriptor(PyObject *cd, char type);
+static JavaType_Type *
+get_field_descriptor(FILE *fd, Handles *handles);
 
 static PyObject *
-get_field_descriptor(FILE *fd, PyObject *handles);
-
-static uint8_t
-set_reference(PyObject *ob, PyObject *handles, uint8_t type);
-
+get_array_values(FILE *fd, JavaType_Type *ob);
 
 /* unit tests */
 

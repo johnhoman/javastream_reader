@@ -108,9 +108,30 @@ class TestParsePrimitiveArray(unittest.TestCase):
     def test_double_array_new(self):
         filename = "primitive_arrays/double_array_new.ser"
         from_file = _test_parse_primitive_array(filename)
-        expected = []
+        expected = [0.0]*300
 
         self.assertEqual(from_file, expected, True)
+
+    def test_double_array_unsigned_2d(self):
+        filename = "primitive_arrays/double_array_unsigned_2d.ser"
+        from_file = _test_parse_primitive_array(filename)
+        expected = [
+            [0.2343134, 1234132.3431, 312431.3, 0, 1.1234],
+            [1.2343134, 12342.003431, 31431.3, 0, 10.1234]
+        ]
+        self.assertEqual(from_file, expected)
+    
+    def test_double_array_unsigned_3d(self):
+        filename = "primitive_arrays/double_array_unsigned_3d.ser"
+        from_file = _test_parse_primitive_array(filename)
+        expected = [
+            [[0.2343134, 1234132.3431, 312431.3, 0, 1.1234],
+            [1.2343134, 12342.003431, 31431.3, 0, 10.1234]],
+            [[0.2343134, 1234132.3431, 312431.3, 0, 1.1234],
+            [1.2343134, 12342.003431, 31431.3, 0, 10.1234]]
+        ]
+        print(from_file)
+        self.assertEqual(from_file, expected)
 
 
 if __name__ == '__main__':
