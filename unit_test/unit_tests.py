@@ -5,7 +5,10 @@
 import unittest
 from numpy import allclose
 from math import pow
-from jso_reader import _test_parse_primitive_array
+from jso_reader import (
+    _test_parse_primitive_array, 
+    _test_parse_class_descriptor,
+)
 
 class TestParsePrimitiveArray(unittest.TestCase):
 
@@ -132,6 +135,15 @@ class TestParsePrimitiveArray(unittest.TestCase):
         ]
         print(from_file)
         self.assertEqual(from_file, expected)
+
+
+class TestParsePrimitiveWrappers(unittest.TestCase):
+
+    def test_class_descriptor_java_lang_Double(self):
+        filename = "primitive_wrappers/double_wrapper.ser"
+        from_file = _test_parse_class_descriptor(filename)
+        print(from_file)
+
 
 
 if __name__ == '__main__':

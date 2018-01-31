@@ -65,19 +65,17 @@ static PyObject *
 parse_tc_array(FILE *fd, Handles *handles);
 
 static PyObject *
-get_values_from_java_type(FILE *fd, PyObject *class_desc);
-
-static PyObject *
-get_value(FILE *fd, char tc_num);
+get_value(FILE *fd, Handles *handles, char tc_num);
 
 static JavaType_Type *
 get_field_descriptor(FILE *fd, Handles *handles);
 
-static PyObject *
-get_array_values(FILE *fd, JavaType_Type *ob);
 
 /* unit tests */
 
 static PyObject *
 __test_parse_primitive_array(PyObject *self, PyObject *args);
+
+static PyObject *
+__test_parse_class_descriptor(PyObject *self, PyObject *args);
 

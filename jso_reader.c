@@ -99,6 +99,8 @@ parse_stream(FILE *fd, Handles *handles, JavaType_Type *type)
             return Py_None;
         case TC_STRING:
         case TC_OBJECT:
+            
+
             Py_INCREF(Py_None);
             return Py_None;
         case TC_LONGSTRING:
@@ -131,7 +133,7 @@ parse_stream(FILE *fd, Handles *handles, JavaType_Type *type)
 }
 
 static PyObject *
-get_value(FILE *fd, char tc_num)
+get_value(FILE *fd, Handles *handles, char tc_num)
 {
     /* * Use the field descriptor to get the value from
      * the stream.
@@ -288,6 +290,8 @@ get_value(FILE *fd, char tc_num)
         }
         case '[':
         case 'L':
+            ob = parse_stream(fd, handles, NULL);
+            break;
         default:
             fprintf(stderr, "Not Implemented for typecode: %c. line(%d) "
                     "file(%s)", tc_num, __LINE__, __FILE__);
@@ -323,7 +327,7 @@ get_field_descriptor(FILE *fd, Handles *handles)
     fieldname = (char *)malloc(fieldname_len + 1);
     assert(fieldname != NULL);
     fieldname[fieldname_len] = 0;
-    n_bytes = fread(&fieldname, 1, fieldname_len, fd);
+    n_bytes = fread(fieldname, 1, fieldname_len, fd);
     assert(n_bytes == fieldname_len);
 
     field->fieldname = fieldname;
@@ -341,6 +345,7 @@ get_field_descriptor(FILE *fd, Handles *handles)
             field->classname = classname;
             field->obj_typecode = field_tc;
             field->is_object = 1;
+            field->jt_type = field_tc;
             break;
 
         }
@@ -353,6 +358,7 @@ get_field_descriptor(FILE *fd, Handles *handles)
         case 'S':
         case 'Z': {
             field->prim_typecode = field_tc;
+            field->jt_type = field_tc;
             field->is_primitive = 1;
             break;
         }
@@ -361,6 +367,53 @@ get_field_descriptor(FILE *fd, Handles *handles)
     }
 
     return field;
+}
+
+static PyObject *
+parse_tc_object(FILE *fd, Handles *handles)
+{
+    
+    JavaType_Type *ob;
+    JavaType_Type *class_desc;
+    PyObject *data;
+    char next_typecode;
+
+    next_typecode = fgetc(fd);
+    ob = JavaType_New(TC_OBJECT);
+    
+
+    switch(next_typecode){
+        case TC_CLASSDESC: {
+            PyObject *__py_ob;
+            class_desc = JavaType_New(next_typecode);
+            __py_ob = parse_tc_classdesc(fd, handles, class_desc);
+            assert(__py_ob == Py_None);
+
+            ob->class_descriptor = class_desc; 
+            Handles_Append(handles, ob);
+
+            JavaType_Type *field;
+            PyObject *value;
+
+            data = PyDict_New();
+            size_t i;
+            for (i = 0; i < class_desc->n_fields; i++) {
+                field = class_desc->fields[i];
+                value = get_value(fd, handles, field->jt_type);
+                printf("ref count before set_item_string %zu\n", Py_REFCNT(value));
+                PyDict_SetItemString(data, field->fieldname, value);
+                printf("ref count after set_item_string %zu\n", Py_REFCNT(value));
+            }
+            break;
+        }
+        default:
+            fprintf(stderr, "Typecode 0x%x not implemented\n", next_typecode);
+            Py_INCREF(Py_None);
+            data = Py_None;
+    }
+
+    return data;
+
 }
 
 static PyObject *
@@ -437,6 +490,7 @@ parse_tc_classdesc(FILE *fd, Handles *handles, JavaType_Type *type)
 
     size_t i;
     for (i = 0; i < n_fields; i++){
+        printf("field descriptor %zu\n", i);
         fields[i] = get_field_descriptor(fd, handles);
     }
 
@@ -446,6 +500,7 @@ parse_tc_classdesc(FILE *fd, Handles *handles, JavaType_Type *type)
     
     char c;
     printf("reached class descriptor end.\n");
+
     c = fgetc(fd);
     assert(c == ungetc(c, fd));
     class_annotation = JavaType_New(c);
@@ -555,7 +610,7 @@ parse_tc_array(FILE *fd, Handles *handles)
         case 'Z': {
             Py_ssize_t i;
             for (i = 0; i < (Py_ssize_t)n_elements; i++){
-                PyList_SetItem(python_array, i, get_value(fd, array_type));
+                PyList_SetItem(python_array, i, get_value(fd, handles, array_type));
             }
             break;
         }
@@ -566,7 +621,7 @@ parse_tc_array(FILE *fd, Handles *handles)
 
 
 static PyObject *
-test_parse_primitive_array(PyObject *self, PyObject *args)
+__test_parse_primitive_array(PyObject *self, PyObject *args)
 {  
     int i = 0x0001;
     little_endian = *((char *)&i);
@@ -599,11 +654,46 @@ test_parse_primitive_array(PyObject *self, PyObject *args)
      
 }
 
+static PyObject *
+__test_parse_class_descriptor(PyObject *self, PyObject *args)
+{
+    int i = 0x0001;
+    little_endian = *((char *)&i);
+    next_handle = 0x7e0000;
+    
+ 
+    char *filename;
+    uint32_t stream_head;
+    size_t n_bytes;
+    FILE *fd; 
+
+    if (!PyArg_ParseTuple(args, "s", &filename)) {
+        return Py_None;
+    }
+
+    fd = fopen(filename, "rb");
+    assert(fd != NULL);
+
+    n_bytes = fread(&stream_head, 1, 4, fd);
+    assert(n_bytes == 4 && stream_head == uint32_switch(0xaced0005));
+
+    Handles *handles = Handles_New(DEFAULT_REFERENCE_SIZE);
+    assert(handles != NULL);
+
+    n_bytes = fread(&type_code, 1, 1, fd);
+    assert(n_bytes == 1);
+ 
+    return parse_tc_object(fd, handles);
+
+}
+
 
 
 static PyMethodDef ReaderMethods[] = {
     {"stream_read", java_stream_reader, METH_VARARGS, "read serialized java stream data"},
-    {"_test_parse_primitive_array", test_parse_primitive_array, METH_VARARGS, "test case for primitive type integer array"},
+    {"_test_parse_primitive_array", __test_parse_primitive_array, METH_VARARGS, "test case for primitive type integer array"},
+    {"_test_parse_class_descriptor", __test_parse_class_descriptor, METH_VARARGS, "test case for class descriptor"},
+ 
     {NULL, NULL, 0, NULL}
 };
 
