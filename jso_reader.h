@@ -76,6 +76,8 @@ get_value(FILE *fd, Handles *handles, char tc_num);
 static JavaType_Type *
 get_field_descriptor(FILE *fd, Handles *handles);
 
+static PyObject *
+get_values_class_desc(FILE *fd, Handles *handles, JavaType_Type *class_desc);
 
 /* unit tests */
 

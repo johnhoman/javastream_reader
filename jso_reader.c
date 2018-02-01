@@ -102,6 +102,7 @@ parse_stream(FILE *fd, Handles *handles, JavaType_Type *type)
         case TC_OBJECT:
             return parse_tc_object(fd, handles);
         case TC_PROXYCLASSDESC:
+            return Py_None; /* is this necessary if it doesn't hold any data? */
         case TC_CLASSDESC:
             return parse_tc_classdesc(fd, handles, type);
             Py_INCREF(Py_None);
@@ -111,17 +112,26 @@ parse_stream(FILE *fd, Handles *handles, JavaType_Type *type)
             return Py_None;
         case TC_REFERENCE: {
             uint32_t handle;
-            size_t n_bytes;
             n_bytes = fread(&handle, 1, 4, fd);
             assert(n_bytes == 4);
+
             if (little_endian){
                 uint32_reverse_bytes(handle);
             }
-            JavaType_Type *ref;
-            ref = Handles_Find(handles, handle);
-            assert(ref != NULL);
-            printf("reference\n");
-            break;
+
+            JavaType_Type *ob;
+            ob = Handles_Find(handles, handle);
+            assert(ob != NULL);
+
+            switch(ob->jt_type){
+                case TC_CLASSDESC:
+                    return get_values_class_desc(fd, handles, ob);
+                case TC_STRING:
+                    return PyUnicode_FromString(ob->string);
+                default:
+                    fprintf(stderr, "Reference type not yet implemented.");
+            }
+
         }
 
     }
@@ -393,6 +403,26 @@ get_field_descriptor(FILE *fd, Handles *handles)
 }
 
 static PyObject *
+get_values_class_desc(FILE *fd, Handles *handles, JavaType_Type *class_desc)
+{
+    JavaType_Type *field;
+    PyObject *data;
+    PyObject *value;
+
+    data = PyDict_New();
+    size_t i;
+    for (i = 0; i < class_desc->n_fields; i++) {
+        field = class_desc->fields[i];
+        value = get_value(fd, handles, field->jt_type);
+
+        PyDict_SetItemString(data, field->fieldname, value);
+        Py_DECREF(value); /* dictionary owns the value */
+
+    } 
+    return data;
+}
+
+static PyObject *
 parse_tc_object(FILE *fd, Handles *handles)
 {
     
@@ -431,19 +461,7 @@ parse_tc_object(FILE *fd, Handles *handles)
             ob->class_descriptor = class_desc; 
             Handles_Append(handles, ob);
 
-            JavaType_Type *field;
-            PyObject *value;
-
-            data = PyDict_New();
-            size_t i;
-            for (i = 0; i < class_desc->n_fields; i++) {
-                field = class_desc->fields[i];
-                value = get_value(fd, handles, field->jt_type);
-
-                PyDict_SetItemString(data, field->fieldname, value);
-                Py_DECREF(value); /* dictionary owns the value */
-
-            }
+            data = get_values_class_desc(fd, handles, ob->class_descriptor);
             break;
         }
         default:
@@ -674,15 +692,20 @@ parse_tc_array(FILE *fd, Handles *handles)
     }
     
     /* needs to be decoupled incase a reference is used to get the data */
-    python_array = PyList_New(n_elements);
+    PyObject *element;
     array_type = classname[1];
     switch(array_type){
         case 'L':
         case '[': {
             Py_ssize_t i;
+            python_array = PyList_New(0);
             for (i = 0; i < (Py_ssize_t)n_elements; i++) {
                 printf("loop iteration %zu\n", (size_t)i);
-                PyList_SetItem(python_array, i, parse_stream(fd, handles, NULL));
+                element = parse_stream(fd, handles, NULL);
+                if (element != Py_None){
+                    PyList_Append(python_array, element);
+                    Py_INCREF(element);
+                }
             }
             break;
         }
@@ -695,6 +718,7 @@ parse_tc_array(FILE *fd, Handles *handles)
         case 'S':
         case 'Z': {
             Py_ssize_t i;
+            python_array = PyList_New(n_elements);
             for (i = 0; i < (Py_ssize_t)n_elements; i++){
                 PyList_SetItem(python_array, i, get_value(fd, handles, array_type));
             }
@@ -711,10 +735,7 @@ __test_parse_primitive_array(PyObject *self, PyObject *args)
 {  
     int i = 0x0001;
     little_endian = *((char *)&i);
-    
-   /*
-    *
-    **/
+
     char *filename;
     uint32_t stream_head;
     size_t n_bytes;

@@ -147,6 +147,13 @@ class TestParsePrimitiveWrappers(unittest.TestCase):
         expected = {"value": 10}
 
         self.assertDictEqual(from_file, expected)
+    
+    def test_class_descriptor_java_lang_Double_array(self):
+        filename = "primitive_wrappers/double_wrapper_array.ser"
+        from_file = _test_parse_class_descriptor(filename)
+        # expected = {"value": 10}
+        print(from_file)
+        # self.assertDictEqual(from_file, expected)
 
     def test_class_descriptor_java_lang_String(self):
         filename = "primitive_wrappers/string_single_sentence.ser"
@@ -155,10 +162,27 @@ class TestParsePrimitiveWrappers(unittest.TestCase):
         
         self.assertEqual(from_file, "This is a string that I am saving to a .ser file")
 
+
+class TestComplexClassStructures(unittest.TestCase):
+
     def test_class_descriptor_simple_class(self):
-        filename = "../person4.ser"
+        filename = "object_w_nested_object.ser"
         from_file = stream_read(filename)
-        pprint(from_file)
+        expected = {
+            'firstName': 'jack',
+            'lastName': 'homan',
+            'ssn': 123456,
+            'age': 27,
+            'siblings': [{
+                'firstName': 'ben',
+                'lastName': 'homan',
+                'ssn': 2345678,
+                'age': 28,
+                'siblings': []
+
+            }]
+        }
+        self.assertDictEqual(from_file, expected)
 
 
 if __name__ == '__main__':
