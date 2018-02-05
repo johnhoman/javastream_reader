@@ -43,7 +43,6 @@
 #define uint32_reverse_bytes(a) a = uint32_switch(a)
 #define uint16_reverse_bytes(a) a = uint16_switch(a)
 
-
 /* function declarations */
 
 static PyObject *
@@ -64,8 +63,11 @@ parse_tc_longstring(FILE *fd, Handles *handles, char *dest);
 static PyObject *
 parse_tc_shortstring(FILE *fd, Handles *handles, char *dest);
 
-static PyObject *
+static void
 parse_tc_classdesc(FILE *fd, Handles *handles, JavaType_Type *type);
+
+static PyObject *
+parse_tc_reference(FILE *fd, Handles *handles);
 
 static PyObject *
 parse_tc_array(FILE *fd, Handles *handles);
@@ -87,3 +89,124 @@ __test_parse_primitive_array(PyObject *self, PyObject *args);
 static PyObject *
 __test_parse_class_descriptor(PyObject *self, PyObject *args);
 
+ /* java.util collections */
+
+ /* Java Containers implements their own write methods
+ * that have block data written to the stream. This 
+ * means that all of the block data has to be parsed per object.
+ */
+
+/* 1.  java.util.ArrayDeque 
+ * 2.  java.util.ArrayList 
+ * 3.  java.util.BitSet 
+ *      - works as a normal class, but needs special condition to represent it as a bitset
+ * 4.  java.util.Calendar - probably just ignore this one and get the block data
+ * 5.  java.util.Collections {theres like a million write object methods}
+ * 6.  java.util.Date 
+ * 7.  java.util.EnumMap
+ * 8.  java.util.HashMap
+ * 9.  java.util.HashSet
+ * 10. java.util.Hashtable
+ * 11. java.util.IdentityHashMap
+ * 12. java.util.LinkedList
+ * 13. java.util.PriorityQueue
+ * 13. <didn't finish list yet> stopped at linked list
+ */
+
+typedef struct LinkedListBlock Java_LinkedList;
+
+struct 
+ArrayDequeBlock {
+    /* default write object */
+    /* size of deque (int) */
+    /* write each object */
+};
+
+struct 
+ArrayListBlock {
+    /* default write object */
+    /* length of array (int) */
+    /* write objects */
+};
+
+struct 
+DateBlock {
+    /* writeLong */  
+};
+
+struct 
+EnumMapBlock {
+    /* defaultWriteObject */
+    /* write size (int) */
+    /* writeObject(key), writeObject(value) for each k-v pair in EnumMap */
+};
+
+struct 
+HashMapBlock {
+    /* defaultWriteObject */
+    /* writeInt buckets */
+    /* writeInt size */
+    /* writeObject(key) writeObject(value) for each k-v pair in Map */
+};
+
+struct 
+HashSetBlock {
+    /* defaultWriteObject */
+    /* capacity (int) */
+    /* load factor (float) */
+    /* size (int) */
+    /* write out all objects with writeObject */
+};
+
+struct 
+HashTableBlock {
+    /* defaultWriteObject */
+    /* table length (int) */
+    /* count (int) */
+    /* writeObject(key) writeObject(value) */
+};
+
+struct 
+IdentityHashMapBlock {
+    /* defaultWriteObject */
+    /* size (int) */
+    /* writeObject(key: could be null?), writeObject(value) */
+};
+
+struct 
+LinkedListBlock {
+    /* defaultWriteObject */
+    /* size (int) */
+    /* writeObject for each object in list */
+};
+
+/* referenced functions */
+static PyObject *
+List_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_desc);
+
+static PyObject *
+parse_block_data(FILE *fd, Handles *handles, JavaType_Type *, PyObject *data);
+
+static PyObject *
+BitSet_ReadObject(FILE *fd, Handles *handles, PyObject *dict);
+
+static PyObject *
+Date_ReadObject(FILE *fd);
+
+static PyObject *
+EnumMap_ReadObject(FILE *fd);
+
+static PyObject *
+HashMap_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_desc);
+
+static PyObject *
+HashSet_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_des);
+
+static PyObject *
+HashTable_ReadObject(FILE *fd);
+
+static PyObject *
+IdentityHashMap_ReadObject(FILE *fd);
+
+static PyObject *
+PriorityQueue_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_desc);

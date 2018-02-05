@@ -1,8 +1,22 @@
-#define DEFAULT_REFERENCE_SIZE 200
+#include "Python.h"
 
+#define DEFAULT_REFERENCE_SIZE 300
+#define TC_NULL 0x70
+#define TC_REFERENCE 0x71
+#define TC_CLASSDESC 0x72
+#define TC_OBJECT 0x73
+#define TC_STRING 0x74
+#define TC_ARRAY 0x75
+#define TC_CLASS 0x76
+#define TC_BLOCKDATA 0x77
+#define TC_ENDBLOCKDATA 0x78
+#define TC_RESET 0x79
+#define TC_EXCEPTION 0x7B
+#define TC_LONGSTRING 0x7C
+#define TC_PROXYCLASSDESC 0x7D
+#define TC_ENUM 0x7E 
 
 #define isinstance(a, b) ((a)->jt_type == b)
-
 
 typedef struct JavaType_Type JavaType_Type;
 typedef struct StreamReference StreamReference;
@@ -44,6 +58,8 @@ struct JavaType_Type {
     JavaType_Type *class_annotation;
     JavaType_Type *super;
     JavaType_Type *class_descriptor;
+    PyObject *value;
+    size_t ref_count;
 };
 
 struct StreamReference {
@@ -73,7 +89,7 @@ Handles *
 Handles_New(size_t size);
 
 uint8_t
-Handles_Destruct(Handles handles);
+Handles_Destruct(Handles *handles);
 
 void 
 Handles_Append(Handles *handles, JavaType_Type *ob);
@@ -84,3 +100,8 @@ Handles_Find(Handles *handles, uint32_t handle);
 JavaType_Type *
 JavaType_New(char type);
 
+void
+JavaType_Destruct(JavaType_Type *type);
+
+void
+Handles_Print(Handles *handles);
