@@ -25,22 +25,19 @@
 
 
 #include "jso_reader.h"
+#include <time.h>
 
 /* static global - set where ever the reader entry point is */
 static uint8_t little_endian;
 static PyObject *collection_value;
 
-
+ 
 
 static PyObject *
 java_stream_reader(PyObject *self, PyObject *args)
 {
-    /* *Entry point for reading from a java serialized object stream
-     * 
-     * arguments
-     * --------
-     * */
-
+    /* these assertions can be removed once I know more about
+     * handling different system architecture */
     assert(sizeof(float) == 4);
     assert(sizeof(double) == 8);
     assert(sizeof(uint32_t) == 4);
@@ -52,9 +49,8 @@ java_stream_reader(PyObject *self, PyObject *args)
     uint8_t i = 0x0001;
     little_endian = *((char *)&i);
 
-
+    /* get rid of this. I don't like this at all */
     collection_value = PyUnicode_FromString("value");
-
 
     char *filename;
 
@@ -65,27 +61,18 @@ java_stream_reader(PyObject *self, PyObject *args)
 
     FILE *fd = fopen(filename, "rb");
 
-    uint16_t magic_number;
-    uint16_t version;
-    size_t n_bytes;
+    uint16_t magic_number = get_unsigned_short(fd);
+    uint16_t version = get_unsigned_short(fd);
 
-    /* validate magic number is correct */
-    n_bytes = fread(&magic_number, 1, sizeof(uint16_t), fd);
-    assert(n_bytes == sizeof(magic_number));
-    assert(uint16_switch(magic_number) == 0xaced);
-
-    /* validate version number is correct */
-    n_bytes = fread(&version, 1, sizeof(uint16_t), fd);
-    assert(n_bytes == sizeof(version));
-    assert(uint16_switch(version) == 0x0005);
+    /* validate magic number and version are correct  */
+    assert(magic_number == 0xaced);
+    assert(version == 0x0005);
 
     Handles *handles = Handles_New(DEFAULT_REFERENCE_SIZE);
 
-    /* global reference to handles */
-
     PyObject *data;
 
-    data = parse_stream(fd, handles, NULL);
+    data = parse_stream(fd, handles);
     
     fclose(fd);
     // Handles_Destruct(handles);
@@ -95,15 +82,38 @@ java_stream_reader(PyObject *self, PyObject *args)
 }
 
 static PyObject *
-parse_stream(FILE *fd, Handles *handles, JavaType_Type *type)
+read_stream(const char *stream, size_t buffer_length)
 {
+    FILE *fd;
+    PyObject *data;
+    Handles *handles;
+    uint16_t magic_number;
+    uint16_t version;
 
+    fd = fmemopen((void *)stream, buffer_length, "r");
+    /* validate stream header */
+    magic_number = get_unsigned_short(fd);
+    version = get_unsigned_short(fd);
+    if (magic_number != 0xaced || version != 0x0005) {
+        fprintf(stderr, "Invalid stream header for java object serialization"
+        " stream protocol.\n\t First 8 bytes must read 0xaced0005.\n\t"
+        "First 8 bytes instead read 0x%x%x", magic_number, version);
+        exit(EXIT_FAILURE);
+    }
 
-    size_t n_bytes;
+    handles = Handles_New(100); /* change to estimate based on 'buffer_length' */
+    data = parse_stream(fd, handles);
+
+    return data;
+
+}
+
+static PyObject *
+parse_stream(FILE *fd, Handles *handles)
+{
     char tc_typecode;
 
-    n_bytes = fread(&tc_typecode, 1, 1, fd);
-    assert(n_bytes == 1);
+    tc_typecode = get_and_validate_stream_typecode(fd);
     PyObject *ob = Py_None;
 
     if (tc_typecode == TC_ARRAY) {
@@ -126,8 +136,9 @@ parse_stream(FILE *fd, Handles *handles, JavaType_Type *type)
     }
     else if (tc_typecode == TC_CLASSDESC) {
         /* TODO: i hate the way this is written */
-
-        parse_tc_classdesc(fd, handles, type); 
+        JavaType_Type *type = JavaType_New(TC_CLASSDESC);
+        parse_tc_classdesc(fd, handles, type);
+        ob = get_values_class_desc(fd, handles, type); 
     }
     else if (tc_typecode == TC_NULL) {
         /* TODO: fix this shit. This should return null instead of Py_None and 
@@ -157,16 +168,9 @@ parse_tc_reference(FILE *fd, Handles *handles)
      * -------
      *     PyObject *ob: pyobject value that the stream is referencing. 
      * */
-    size_t n_bytes;
     uint32_t handle;
-    n_bytes = fread(&handle, 1, 4, fd);
-    assert(n_bytes == 4);
 
-    if (little_endian){
-        uint32_reverse_bytes(handle);
-    }
-
-    assert(handle >= 0x7e0000 && handle < handles->next_handle);
+    handle = get_handle(fd);
 
     JavaType_Type *obj = NULL;
     PyObject *ob;
@@ -188,8 +192,8 @@ parse_tc_reference(FILE *fd, Handles *handles)
         ob = obj->value;
     }
     else {
-        fprintf(stderr, "NOT TYPECODE IMPLEMENTATION: 0x%x, %d\n", obj->jt_type, __LINE__);
-        exit(1); 
+        fprintf(stderr, "NO TYPECODE IMPLEMENTATION: 0x%x, %d\n", obj->jt_type, __LINE__);
+        exit(EXIT_FAILURE); 
     }
 
     return ob;
@@ -225,228 +229,77 @@ parse_tc_string(FILE *fd, Handles *handles, char *dest, size_t length)
 static PyObject *
 parse_tc_longstring(FILE *fd, Handles *handles, char *dest)
 {
-
+    /* the casting at the botton to size_t won't work I 
+     * think unless the size of a long on the machine is
+     * 8 bytes, which doesn't seem to be guarenteed.
+     */
     uint64_t len;
-    size_t n_bytes;
 
-    n_bytes = fread(&len, 1, 8, fd);
-    assert(n_bytes == 8);
-    if (little_endian) {
-        uint64_reverse_bytes(len);
-    }
-
+    len = get_unsigned_long_long(fd);
     return parse_tc_string(fd, handles, dest, (size_t)len);
 }
 
 static PyObject *
 parse_tc_shortstring(FILE *fd, Handles *handles, char *dest)
 {
-
-    uint16_t len;
-    size_t n_bytes;
- 
-    n_bytes = fread(&len, 1, 2, fd);
-    assert(n_bytes == 2);
-    if (little_endian){
-        uint16_reverse_bytes(len);
-    }
-
-    return parse_tc_string(fd, handles, dest, (size_t)len);
+    /* read 2 bytes from the stream followed by a string
+     * and a python unicode object.
+     * */
+    return parse_tc_string(fd, handles, dest, get_size(fd));
 }
 
 static PyObject *
 get_value(FILE *fd, Handles *handles, char tc_num)
 {
-
-    /* * Use the field descriptor to get the value from
-     * the stream.
-     * 
-     * arguments
-     * ---------
-     *     fd: file descriptor
-     *     _tc: type code :: possible changing this to file descriptor
-     *                    :: but I don't know what I'm going to return 
-     *                    :: from the function
-     * 
-     * */
     PyObject *ob; /* return object */
     size_t n_bytes; /* number of bytes read from the stream */
-    
-    // if (tc_num == 'B'){
-    //     /**java byte. 
-    //      * 
-    //      * type: 8-bit signed two's complement
-    //      * range: -128 to 127
-    //      * */
-    //     int8_t value;
-    //     n_bytes = fread(&value, 1, 1, fd);
-    //     assert(-128 <= value && value <= 127 && n_bytes == 1);
-    //     ob = PyLong_FromLong((long)value);
-    // }
-    // else if (tc_num == 'C'){
-    //     /** Java char. 
-    //      * 
-    //      * char: The char data type is a single 16-bit 
-    //      *       Unicode character. It has a minimum value 
-    //      *       of '\u0000' (or 0) and a maximum value 
-    //      *       of '\uffff' (or 65,535 inclusive).
-    //      */
-    //     uint32_t value;
-    //     n_bytes = fread(&value, 1, 2, fd);
-    //     if (little_endian) {
-    //         uint16_reverse_bytes(n_bytes);
-    //     }
-    //     assert(0 <= value && value <= 65353 && n_bytes == 2);
-    //     ob = PyUnicode_FromStringAndSize((char *)&value, 2);
-    // }
 
+    if (tc_num == 'B'){
+        uint8_t value;
+        n_bytes = fread(&value, 1, 1, fd);
+        assert(n_bytes == sizeof(uint8_t));
 
-    switch(tc_num){
-        case 'B': {
-
-            /* * Read 1 unsigned byte from the stream
-             * 
-             * */
-            uint8_t value;
-            n_bytes = fread(&value, 1, 1, fd);
-            assert(n_bytes == sizeof(uint8_t));
-
-            ob = PyBytes_FromStringAndSize((char *)&value, 1);
-            break;
-
+        ob = PyBytes_FromStringAndSize((char *)&value, 1);
+    }
+    else if (tc_num == 'C'){
+        uint32_t value;
+        n_bytes = fread(&value, 1, 2, fd);
+        if (little_endian) {
+            uint16_reverse_bytes(n_bytes);
         }
-        case 'C': {
-            /*  
-             * Read java char size {2 bytes} from the stream.
-             * 
-             * */
+        assert(0 <= value && value <= 65353 && n_bytes == 2);
+        ob = PyUnicode_FromStringAndSize((char *)&value, 2);
+    }
+    else if (tc_num == 'D'){
+        ob = get_double_value(fd);
+    }
+    else if (tc_num == 'F'){
+        ob = get_float_value(fd);
+    }
+    else if (tc_num == 'I'){
+        ob = get_signed_integer_value(fd);
+    }
+    else if (tc_num == 'J'){
+        ob = get_signed_long_value(fd);
+    }
+    else if (tc_num == 'S'){
+        ob = get_signed_short_value(fd);
+    }
+    else if (tc_num == 'Z'){
+        uint8_t value;
+        n_bytes = fread(&value, 1, 1, fd);
+        assert(n_bytes == 1);
+        assert(value == 1 || value == 0);
 
-
-            uint32_t value;
-            n_bytes = fread(&value, 1, 2, fd);
-            if (little_endian) {
-                uint16_reverse_bytes(n_bytes);
-            }
-            assert(0 <= value && value <= 65353 && n_bytes == 2);
-            ob = PyUnicode_FromStringAndSize((char *)&value, 2);
-            break;
-
-        }
-        case 'D': {
-            /* read 8 bytes from the stream and convert them to
-             * little endian if needed
-             * */
-            double value;
-            n_bytes = fread(&value, 1, 8, fd);
-            assert(n_bytes == 8);
-
-            if (little_endian)  {
-
-                double copy = value;
-                char *ptr = (char *)&value;
-                char *cpy = (char *)&copy;
-
-                ptr[7] = cpy[0];
-                ptr[6] = cpy[1];
-                ptr[5] = cpy[2];
-                ptr[4] = cpy[3];
-                ptr[3] = cpy[4];
-                ptr[2] = cpy[5];
-                ptr[1] = cpy[6];
-                ptr[0] = cpy[7];
-
-            }
-
-            ob = PyFloat_FromDouble(value);
-            break;
-        }
-        case 'F': {
-
-            float value;
-            n_bytes = fread(&value, 1, 4, fd);
-            assert(n_bytes == 4);
-
-            if (little_endian){
-
-                float copy = value;
-
-                char *cpy = (char *)&copy;
-                char *ptr = (char *)&value;
-                /*  */
-
-                ptr[0] = cpy[3];
-                ptr[1] = cpy[2];
-                ptr[2] = cpy[1];
-                ptr[3] = cpy[0]; 
-
-            }
-
-            ob = PyFloat_FromDouble((double)value);
-
-            break;
-
-        }
-        case 'I': {
-            /* 4 byte integer */
-            
-            int32_t value;
-            n_bytes = fread(&value, 1, 4, fd);
-            assert(n_bytes == 4);
-
-            if (little_endian)
-                uint32_reverse_bytes(value);
-
-            ob = PyLong_FromLong((long)value);
-
-            break;
-        }
-        case 'J': {
-
-            /* 8 byte long */
-            
-            int64_t value;
-            n_bytes = fread(&value, 1, 8, fd);
-            assert(n_bytes == 8);
-
-            if (little_endian)
-                uint64_reverse_bytes(value);
-
-            ob = PyLong_FromLongLong((long long)value);
-            break;
-
-        }
-        case 'S': {
-
-            int16_t value;
-            n_bytes = fread(&value, 1, 2, fd);
-            assert(n_bytes == 2);
-
-            if (little_endian)
-                uint16_reverse_bytes(value);
-
-            ob = PyLong_FromLong((long)value);
-
-            break;
-        }
-        case 'Z': {
-
-            uint8_t value;
-            n_bytes = fread(&value, 1, 1, fd);
-            assert(n_bytes == 1);
-            assert(value == 1 || value == 0);
-
-            ob = PyBool_FromLong((long)value);
-
-            break;
-        }
-        case '[':
-        case 'L':
-            ob = parse_stream(fd, handles, NULL);
-            break;
-        default:
-            fprintf(stderr, "Not Implemented for typecode: 0x%x. line(%d) "
+        ob = PyBool_FromLong((long)value);
+    }
+    else if (tc_num == '[' || tc_num == 'L'){
+        ob = parse_stream(fd, handles);
+    }
+    else {
+        fprintf(stderr, "Not Implemented for typecode: 0x%x. line(%d) "
                     "file(%s)\n", tc_num, __LINE__, __FILE__);
-            exit(1);
+        exit(1); 
     }
 
     return ob;
@@ -459,28 +312,16 @@ get_field_descriptor(FILE *fd, Handles *handles)
 
     size_t n_bytes;
     char field_tc;
-    uint16_t fieldname_len;
     char *fieldname;
     char *classname;
 
-    n_bytes = fread(&field_tc, 1, 1, fd);
-    assert(n_bytes == 1 && strchr("BCDFIJSZL[", field_tc) != NULL);
+    field_tc = get_and_validate_field_typecode(fd);
     
     field = JavaType_New(0);
     assert(field != NULL);
 
-    n_bytes = fread(&fieldname_len, 1, 2, fd);
-    assert(n_bytes == n_bytes);
+    fieldname = get_size_and_string(fd);
 
-    if (little_endian){
-        uint16_reverse_bytes(fieldname_len);
-    }
-
-    fieldname = (char *)malloc(fieldname_len + 1);
-    assert(fieldname != NULL);
-    fieldname[fieldname_len] = 0;
-    n_bytes = fread(fieldname, 1, fieldname_len, fd);
-    assert(n_bytes == fieldname_len);
     field->fieldname = fieldname;
 
     switch(field_tc){
@@ -499,34 +340,26 @@ get_field_descriptor(FILE *fd, Handles *handles)
             if (classname_tc == TC_STRING) {
                 str = parse_tc_shortstring(fd, handles, classname);
                 Py_DECREF(str); /* I don't need these values */
-
             }
             else if (classname_tc == TC_LONGSTRING) {
                 str = parse_tc_longstring(fd, handles, classname);
                 Py_DECREF(str); /* I don't need these values */
-
-            } else if (classname_tc == TC_REFERENCE) {
-                JavaType_Type *ref_string = NULL;
+            } 
+            else if (classname_tc == TC_REFERENCE) {
+                JavaType_Type *ref_string;
                 uint32_t handle;
 
-                n_bytes = fread(&handle, 1, 4, fd);
-                assert(n_bytes == 4);
-
-                if (little_endian) {
-                    uint32_reverse_bytes(handle);
-                }
-                assert(0x7e0000 <= handle && handle < handles->next_handle);
+                handle = get_handle(fd);
 
                 ref_string = Handles_Find(handles, handle);
                 assert(ref_string != NULL);
                 assert(ref_string->jt_type == TC_STRING || ref_string->jt_type == TC_LONGSTRING);
-                printf("classname from ref: %s\n", ref_string->string);
-                classname = ref_string->string;
 
+                classname = ref_string->string;
             }
-            printf("classname: %s\n", field->classname);
+
             field->classname = classname;
-            printf("classname: %s\n\n", field->classname);
+
             field->obj_typecode = field_tc;
             field->is_object = 1;
             field->jt_type = field_tc;
@@ -561,8 +394,8 @@ get_values_class_desc(FILE *fd, Handles *handles, JavaType_Type *class_desc)
 
     char sc_write_method = class_desc->flags.sc_write_method;
     char sc_serializable = class_desc->flags.sc_serializable;
-    char sc_externalizable = class_desc->flags.sc_externalizable;
-    char sc_block_data = class_desc->flags.sc_block_data;
+    // char sc_externalizable = class_desc->flags.sc_externalizable;
+    // char sc_block_data = class_desc->flags.sc_block_data;
     char c;
     PyObject *data, *value;
     JavaType_Type *field = NULL;
@@ -570,8 +403,6 @@ get_values_class_desc(FILE *fd, Handles *handles, JavaType_Type *class_desc)
     data = PyDict_New();
 
     if (sc_serializable) {
-
-
         if (class_desc->n_fields == 1 
             && !strncmp(class_desc->fields[0]->fieldname, "value", 5)
             && (!strncmp(class_desc->classname, "java.lang.Boolean", 17)
@@ -658,7 +489,6 @@ parse_tc_object(FILE *fd, Handles *handles)
     JavaType_Type *class_desc = NULL;
     PyObject *data;
     char next_typecode;
-    size_t n_bytes;
 
     next_typecode = fgetc(fd);
     assert(next_typecode == TC_REFERENCE 
@@ -676,13 +506,7 @@ parse_tc_object(FILE *fd, Handles *handles)
                 parse_tc_classdesc(fd, handles, class_desc);
             }
             else {
-                uint32_t handle;
-                n_bytes = fread(&handle, 1, 4, fd);
-                assert(n_bytes == 4);
-
-                if (little_endian) {
-                    uint32_reverse_bytes(handle);
-                }
+                uint32_t handle = get_handle(fd);
                 class_desc = Handles_Find(handles, handle);
                 assert(class_desc != NULL);
                 assert(class_desc->jt_type == TC_CLASSDESC);
@@ -721,7 +545,6 @@ parse_tc_classdesc(FILE *fd, Handles *handles, JavaType_Type *type)
     size_t n_bytes;
 
     //JavaType_Type *handle_obj;
-    uint16_t classname_len;
     char *classname;
     uint64_t suid;
     struct {
@@ -734,35 +557,13 @@ parse_tc_classdesc(FILE *fd, Handles *handles, JavaType_Type *type)
     uint16_t n_fields;
     JavaType_Type **fields = NULL;
 
-    /* classname size */
-    n_bytes = fread(&classname_len, 1, 2, fd);
-    assert(n_bytes == 2);
+    classname = get_size_and_string(fd);
+    suid = get_unsigned_long_long(fd);
 
-    if (little_endian){
-        uint16_reverse_bytes(classname_len);
-    }
-
-    /* classname */
-    classname = (char *)malloc(classname_len + 1);
-    assert(classname != NULL);
-    classname[classname_len] = 0;
-    n_bytes = fread(classname, 1, classname_len, fd);
-    assert(n_bytes == classname_len);
-
-    /* serial version uid */
-    n_bytes = fread(&suid, 1, 8, fd);
-    assert(n_bytes == 8);
-
-    if (little_endian){
-        uint16_reverse_bytes(suid);
-    }
-    printf("classname: %s\n", type->classname);
     type->classname = classname;
     type->string = classname;
-
-    printf("classname: %s\n\n", type->classname); 
-    printf("string: %s\n\n", type->string); 
     type->serial_version_uid = suid;
+
     /*****NEW HANDLE NEEDS TO GO IN HERE BEFORE THE FIELDS*******/
     Handles_Append(handles, type);
 
@@ -771,41 +572,32 @@ parse_tc_classdesc(FILE *fd, Handles *handles, JavaType_Type *type)
     assert(n_bytes == 1);
 
     /* number of fields */
-    n_bytes = fread(&n_fields, 1, 2, fd);
-    assert(n_bytes == 2);
+    n_fields = get_size(fd);
 
-    if (little_endian){
-        uint16_reverse_bytes(n_fields);
-    }
     fields = (JavaType_Type **)malloc(sizeof(void *)*n_fields);
     assert(fields != NULL);
 
     size_t i;
     for (i = 0; i < n_fields; i++){
         fields[i] = get_field_descriptor(fd, handles);
-
     }
 
     type->n_fields = n_fields;
     type->fields = fields;
     memcpy(&type->flags, &flags, 1);
     
-    char c;
-
+ 
     /* PLACEHOLDER FOR CLASS ANNOTATIONS */
     assert(fgetc(fd) == TC_ENDBLOCKDATA);
 
-
-    c = fgetc(fd);
-
+    char c;
+    c = get_and_validate_stream_typecode(fd);
     if (c == TC_REFERENCE) {
 
         uint32_t handle;
-        n_bytes = fread(&handle, 1, 4, fd);
-        assert(n_bytes == 4);
-        if (little_endian) {
-            uint32_reverse_bytes(handle);
-        }
+        
+        handle = get_handle(fd);
+
         JavaType_Type *ref;
 
         ref = Handles_Find(handles, handle);
@@ -815,14 +607,18 @@ parse_tc_classdesc(FILE *fd, Handles *handles, JavaType_Type *type)
     }
     else if (c == TC_PROXYCLASSDESC) {
         printf("TC_PROXYCLASSDESC not implemented\n");
+        exit(EXIT_FAILURE);
         type->super = NULL;
     }
     else if (c == TC_CLASSDESC) {
         type->super = JavaType_New(c);
         parse_tc_classdesc(fd, handles, type->super);
     }
-    else {
+    else if (c == TC_NULL) {
         type->super = NULL;
+    }
+    else {
+        printf("unknown stream code 0x%x\n", c);
     }
 
 }
@@ -843,24 +639,19 @@ parse_tc_array(FILE *fd, Handles *handles)
     JavaType_Type *array = NULL;
     JavaType_Type *class_desc = NULL;
     PyObject *python_array;
-    size_t n_bytes;
+
     uint32_t n_elements;
     char array_type;
     char next_type;
     char *classname;
     
-    next_type = fgetc(fd);
-    assert(next_type != EOF);
+    next_type = get_and_validate_stream_typecode(fd);
 
     array = JavaType_New(TC_ARRAY);
     if (next_type == TC_REFERENCE){
         uint32_t handle;
-        size_t n_bytes;
-        n_bytes = fread(&handle, 1, 4, fd);
-        assert(n_bytes == 4);
-        if (little_endian){
-            uint32_reverse_bytes(handle);
-        }
+        
+        handle = get_handle(fd);
         class_desc = Handles_Find(handles, handle);
         assert(class_desc != NULL);
     }
@@ -882,12 +673,8 @@ parse_tc_array(FILE *fd, Handles *handles)
     classname = class_desc->classname;
     assert(classname[0] == '[');
 
-    n_bytes = fread(&n_elements, 1, 4, fd);
-    assert(n_bytes == 4);
+    n_elements = get_unsigned_long(fd);
 
-    if (little_endian){
-        uint32_reverse_bytes(n_elements);
-    }
     
     /* needs to be decoupled incase a reference is used to get the data */
     PyObject *element;
@@ -898,7 +685,7 @@ parse_tc_array(FILE *fd, Handles *handles)
             Py_ssize_t i;
             python_array = PyList_New(0);
             for (i = 0; i < (Py_ssize_t)n_elements; i++) {
-                element = parse_stream(fd, handles, NULL);
+                element = parse_stream(fd, handles);
                 if (element != Py_None){
                     assert(PyList_Append(python_array, element) == 0);
                     Py_DECREF(element);
@@ -938,6 +725,9 @@ parse_block_data(FILE *fd, Handles *handles, JavaType_Type *class_desc, PyObject
      *     [endBlockData (TC_ENDBLOCKDATA)]
      *     [contents (parse_stream)] [TC_<ANY> endBlockData]
      */
+    
+
+
     assert(class_desc != NULL);
     assert(class_desc->flags.sc_write_method);
 
@@ -973,6 +763,7 @@ parse_block_data(FILE *fd, Handles *handles, JavaType_Type *class_desc, PyObject
     else {
        Py_INCREF(Py_None);
        fprintf(stderr, "classname not found %s\n", class_desc->classname); 
+       exit(EXIT_FAILURE); 
     }
 
     return ob;
@@ -993,7 +784,6 @@ List_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_desc)
      *     the interpreter because the default return type is of type dict.
      */
 
-    size_t n_bytes;
     uint32_t size;
     unsigned char first_byte;
     PyObject *list;
@@ -1001,25 +791,18 @@ List_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_desc)
 
     assert(class_desc->flags.sc_write_method == 1);
 
-    n_bytes = fread(&first_byte, 1, 1, fd);
-    assert(n_bytes == 1);
-
+    first_byte = get_byte(fd);
     assert(first_byte == 4);
 
     /* LinkedList writeObject writes a java int to the stream for the size of the list */
-    n_bytes = fread(&size, 1, 4, fd);
-    assert(n_bytes == 4);
-
-    if (little_endian){
-        uint32_reverse_bytes(size);
-    }
+    size = get_unsigned_long(fd);
 
     list = PyList_New(size);
     assert(list != NULL);
 
     size_t i;
     for (i = 0; i < size; i++){
-        element = parse_stream(fd, handles, NULL);
+        element = parse_stream(fd, handles);
         PyList_SetItem(list, (Py_ssize_t)i, element); /* PyList 'steals' */
     }  
 
@@ -1063,8 +846,6 @@ BitSet_ReadObject(FILE *fd, Handles *handles, PyObject *data) {
             }
             l_bits = l_bits >> 1;
         }    
-
-
     }
 
     Py_DECREF(data);
@@ -1076,7 +857,6 @@ static PyObject *
 HashMap_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_desc)
 {
 
-    size_t n_bytes;
     uint32_t buckets;
     uint32_t size;
     unsigned char first_byte;
@@ -1086,36 +866,22 @@ HashMap_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_desc)
 
     assert(strncmp(class_desc->classname, "java.util.HashMap", 17) == 0);
 
-    n_bytes = fread(&first_byte, 1, 1, fd);
-    assert(n_bytes == 1);
+    first_byte = get_byte(fd);
     assert(first_byte == 8);
 
-    n_bytes = fread(&buckets, 1, sizeof(buckets), fd);
-    assert(n_bytes == sizeof(buckets));
-
-    n_bytes = fread(&size, 1, sizeof(size), fd);
-    assert(n_bytes == sizeof(size));
-
-    if (little_endian){
-        uint32_reverse_bytes(buckets);
-        uint32_reverse_bytes(size);
-    }
+    buckets = get_unsigned_long(fd);
+    size = get_unsigned_long(fd);
 
     assert(size < buckets);
 
     dict = PyDict_New();
     size_t i;
     for (i = 0; i < size; i++){
-
-        key = parse_stream(fd, handles, NULL);
-
-        item = parse_stream(fd, handles, NULL);
-
+        key = parse_stream(fd, handles);
+        item = parse_stream(fd, handles);
         PyDict_SetItem(dict, key, item);
-    
         Py_DECREF(key);
         Py_DECREF(item);
-
     }
 
     return dict;
@@ -1128,7 +894,6 @@ HashSet_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_desc)
     assert(!strncmp(class_desc->classname, "java.util.HashSet", 17));
     assert(class_desc->flags.sc_write_method);
 
-    size_t n_bytes;
     uint8_t first_byte;
     uint32_t capacity;
     uint32_t size;
@@ -1136,36 +901,18 @@ HashSet_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_desc)
     PyObject *list;
     PyObject *element;
 
-    n_bytes = fread(&first_byte, 1, 1, fd);
-    assert(n_bytes == 1);
-    assert(first_byte == 12); /* sizeof(int) + sizeof(float) + sizeof(int) */
+    first_byte = get_byte(fd);
+    assert(first_byte == 12);
 
-    n_bytes = fread(&capacity, 1, 4, fd);
-    assert(n_bytes == 4);
-
-    n_bytes = fread(&load_factor, 1, 4, fd);
-    assert(n_bytes == 4);
-
-    n_bytes = fread(&size, 1, 4, fd);
-    assert(n_bytes == 4);
-
-    if (little_endian) {
-        uint32_reverse_bytes(capacity);
-        uint32_reverse_bytes(size);
-        float copy = load_factor;
-        char *ptr = (char *)&load_factor;
-        char *cpy = (char *)&copy;
-        ptr[3] = cpy[0];
-        ptr[2] = cpy[1];
-        ptr[1] = cpy[2];
-        ptr[0] = cpy[3];
-    }
+    capacity = get_unsigned_long(fd);
+    load_factor = get_signed_float(fd);
+    size = get_unsigned_long(fd);
 
     list = PyList_New(size);
 
     size_t i;
     for (i = 0; i < size; i++) {
-        element = parse_stream(fd, handles, NULL);
+        element = parse_stream(fd, handles);
         assert(element != NULL);
         PyList_SetItem(list, (Py_ssize_t)i, element);
     }
@@ -1175,7 +922,6 @@ HashSet_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_desc)
     assert(set != NULL);
 
     return set;
-
 }
 
 
@@ -1191,37 +937,27 @@ PriorityQueue_ReadObject(FILE *fd, Handles *handles, JavaType_Type *class_desc)
     assert(!strncmp(class_desc->classname, "java.util.PriorityQueue", 23));
     assert(class_desc->flags.sc_write_method == 1);
 
-    size_t n_bytes;
     uint32_t size;
     unsigned char first_byte;
     PyObject *list;
     PyObject *element;
 
-    assert(class_desc->flags.sc_write_method == 1);
-
-    n_bytes = fread(&first_byte, 1, 1, fd);
-    assert(n_bytes == 1);
+    first_byte = get_byte(fd);
     assert(first_byte == 4);
 
     /* LinkedList writeObject writes a java int to the stream for the size of the list */
-    n_bytes = fread(&size, 1, 4, fd);
-    assert(n_bytes == 4);
+    size = get_unsigned_long(fd) - 1;
 
-    if (little_endian){
-        uint32_reverse_bytes(size);
-    }
-
-    list = PyList_New(size - 1);
+    list = PyList_New(size);
     assert(list != NULL);
 
     size_t i;
-    for (i = 0; i < size - 1; i++){
-        element = parse_stream(fd, handles, NULL);
+    for (i = 0; i < size; i++){
+        element = parse_stream(fd, handles);
         PyList_SetItem(list, (Py_ssize_t)i, element);
     }  
 
     return list;
-
 }
 
 static PyObject *
@@ -1248,7 +984,7 @@ __test_parse_primitive_array(PyObject *self, PyObject *args)
     Handles *handles = Handles_New(DEFAULT_REFERENCE_SIZE);
     assert(handles != NULL);
 
-    return parse_stream(fd, handles, NULL);
+    return parse_stream(fd, handles);
      
 }
 
@@ -1277,10 +1013,308 @@ __test_parse_class_descriptor(PyObject *self, PyObject *args)
     Handles *handles = Handles_New(DEFAULT_REFERENCE_SIZE);
     assert(handles != NULL);
  
-    return parse_stream(fd, handles, NULL);
+    return parse_stream(fd, handles);
 
 }
 
+static char *
+get_string(FILE *fd, size_t len)
+{   
+    /* * get_string(fd, len) reads a string of
+     * bytes of length len and allocate those bytes
+     * to the heap. The caller of this function will
+     * be responsible for freeing the memory
+     * 
+     * arguments
+     * ---------
+     *     fd: file descriptor for the file stream
+     *     len: number of bytes to read from the stream
+     * 
+     * returns
+     * -------
+     *     str: null terminated string allocated on the heap
+     * */
+    size_t n_bytes; 
+    char *str;
+    
+    str = (char *)malloc(len + 1);
+    assert(str != NULL);
+    str[len] = 0;
+
+    n_bytes = fread(str, sizeof(char), len, fd);
+
+    return str;
+}
+
+static uint32_t
+get_unsigned_long(FILE *fd)
+{
+    /* * Read a 4-byte unsigned integer from the stream.
+     * 
+     * */
+
+    uint32_t value;
+    size_t n_bytes;
+    
+    n_bytes = fread(&value, sizeof(char), sizeof(uint32_t), fd);
+    assert(n_bytes == sizeof(uint32_t));
+
+    if (little_endian){
+        uint32_reverse_bytes(value);
+    }
+    
+    return value;
+}
+
+static PyObject *
+get_signed_integer_value(FILE *fd)
+{
+    PyObject *ob;
+    long value;
+
+    value = (long)(int32_t)get_unsigned_long(fd);
+    ob = PyLong_FromLong(value);
+
+    return ob;
+
+}
+
+static uint16_t
+get_unsigned_short(FILE *fd)
+{
+    uint16_t value;
+    size_t n_bytes;
+
+    n_bytes = fread(&value, 1, sizeof(uint16_t), fd);
+    assert(n_bytes == sizeof(uint16_t));
+    
+    if (little_endian){
+        uint16_reverse_bytes(value);
+    }
+    return value;
+}
+
+static int16_t
+get_signed_short(FILE *fd)
+{
+    return (int16_t)get_unsigned_short(fd);
+}
+
+static PyObject *
+get_signed_short_value(FILE *fd)
+{
+    int16_t value;
+
+    value = get_signed_short(fd);
+    /* possible unsafe cast */
+    return PyLong_FromLong((long)value);
+}
+
+
+static size_t 
+get_size(FILE *fd)
+{ 
+    /* *return 2 byte unsigned int from the file stream.
+     * Several objects from the stream require the size of an 
+     * item prior to reading.
+     * 
+     * use for
+     * -------
+     *     classname length
+     *     number of fields
+     * */
+
+    return (size_t)get_unsigned_short(fd);
+}
+
+static char *
+get_size_and_string(FILE *fd)
+{
+    /** Reads the size of a string from the byte stream
+     * and then the string itself. 
+     * 
+     * arguments
+     * ---------
+     *     fd: file descriptor/byte stream
+     * 
+     * returns
+     * -------
+     *     str: a null terminated string allocated to the heap
+     * */
+
+    size_t num_chars;
+    char *str;
+
+    num_chars = get_size(fd); 
+    str = get_string(fd, num_chars);
+
+    return str;
+}
+
+static double
+get_signed_double(FILE *fd)
+{
+    /* * Read a signed double from the file stream. 
+     * Big to Little endian conversion has to be done
+     * as shown below because bitwise shifting isn't 
+     * allowed for floating point values.
+     * 
+     * */
+    double value;
+    size_t n_bytes;
+
+    n_bytes = fread(&value, 1, sizeof(double), fd);
+    assert(n_bytes == sizeof(double));
+
+    if (little_endian)  {
+        double copy = value;
+        char *ptr = (char *)&value;
+        char *cpy = (char *)&copy;
+
+        ptr[7] = cpy[0];
+        ptr[6] = cpy[1];
+        ptr[5] = cpy[2];
+        ptr[4] = cpy[3];
+        ptr[3] = cpy[4];
+        ptr[2] = cpy[5];
+        ptr[1] = cpy[6];
+        ptr[0] = cpy[7];
+    }
+
+    return value;
+}
+
+static PyObject *
+get_double_value(FILE *fd)
+{
+    double value;
+    PyObject *ob;
+
+    value = get_signed_double(fd);
+    ob = PyFloat_FromDouble(value);
+
+    return ob;
+}
+
+static float
+get_signed_float(FILE *fd)
+{
+    size_t n_bytes;
+    float value;
+
+    n_bytes = fread(&value, 1, sizeof(float), fd);
+    assert(n_bytes == 4);
+
+    if (little_endian){
+
+        float copy = value;
+
+        char *cpy = (char *)&copy;
+        char *ptr = (char *)&value;
+
+        ptr[0] = cpy[3];
+        ptr[1] = cpy[2];
+        ptr[2] = cpy[1];
+        ptr[3] = cpy[0]; 
+
+    }
+
+    return value; 
+}
+
+static PyObject *
+get_float_value(FILE *fd)
+{
+    double value;
+    PyObject *ob;
+
+    value = (double)get_signed_float(fd);
+    ob = PyFloat_FromDouble(value);
+
+    return ob;
+}
+
+static int64_t 
+get_signed_long_long(FILE *fd)
+{
+    int64_t value;
+    size_t n_bytes;
+
+    n_bytes = fread(&value, 1, sizeof(int64_t), fd);
+    assert(n_bytes == sizeof(int64_t));
+
+    if (little_endian) {
+        uint64_reverse_bytes(value);
+    }
+
+    return value;
+}
+
+static uint64_t 
+get_unsigned_long_long(FILE *fd)
+{
+
+    return (uint64_t)get_signed_long_long(fd);
+}
+
+static PyObject *
+get_signed_long_value(FILE *fd)
+{
+    int64_t value;
+    PyObject *ob;
+
+    value = get_signed_long_long(fd);
+    ob = PyLong_FromLongLong(value);
+
+    return ob;
+}
+
+static unsigned char
+get_byte(FILE *fd)
+{
+    size_t n_bytes;
+    char bbyte;
+
+    n_bytes = fread(&bbyte, 1, 1, fd);
+    assert(n_bytes == 1);
+
+    return bbyte;
+}
+
+static unsigned char 
+get_and_validate_field_typecode(FILE *fd)
+{
+    unsigned char typecode = get_byte(fd);
+    assert(strchr("BCDFIJSZL[", typecode) != NULL);
+
+    return typecode;
+}
+
+static unsigned char 
+get_and_validate_stream_typecode(FILE *fd)
+{
+    unsigned char typecode = get_byte(fd);
+    assert(0x70 <= typecode && typecode <= 0x7E);
+
+    return typecode;
+}
+
+static uint32_t
+get_handle(FILE *fd)
+{
+    uint32_t value;
+
+    value = get_unsigned_long(fd);
+    assert(0x7e0000 <= value);
+
+    return value;
+}
+
+static uint64_t
+get_serial_version_uid(FILE *fd)
+{
+    return 0;
+}
 
 static PyMethodDef ReaderMethods[] = {
     {"stream_read", java_stream_reader, METH_VARARGS, "read serialized java stream data"},

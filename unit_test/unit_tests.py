@@ -340,6 +340,7 @@ class ContainerUnitTest(unittest.TestCase):
             'hashSet': set(),
             'queue': [0, 1, 16, 81, 256]
         }  
+        pprint(from_file)
 
         self.assertDictEqual(from_file, expected)
 

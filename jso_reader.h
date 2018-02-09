@@ -49,7 +49,10 @@ static PyObject *
 java_stream_reader(PyObject *self, PyObject *args);
 
 static PyObject *
-parse_stream(FILE *fd, Handles *handles, JavaType_Type *);
+read_stream(const char *stream, size_t buffer_length);
+
+static PyObject *
+parse_stream(FILE *fd, Handles *handles);
 
 static PyObject *
 parse_tc_object(FILE *fd, Handles *handles);
@@ -80,6 +83,66 @@ get_field_descriptor(FILE *fd, Handles *handles);
 
 static PyObject *
 get_values_class_desc(FILE *fd, Handles *handles, JavaType_Type *class_desc);
+
+static char *
+get_string(FILE *fd, size_t len);
+
+static uint32_t 
+get_unsigned_long(FILE *fd);
+
+static PyObject *
+get_signed_integer_value(FILE *fd);
+
+static uint16_t
+get_unsigned_short(FILE *fd);
+
+static int16_t 
+get_signed_short(FILE *fd);
+
+static PyObject *
+get_signed_short_value(FILE *fd);
+
+static size_t 
+get_size(FILE *fd);
+
+static char *
+get_size_and_string(FILE *fd);
+
+static double
+get_signed_double(FILE *fd);
+
+static PyObject *
+get_double_value(FILE *fd);
+
+static float
+get_signed_float(FILE *fd);
+
+static PyObject *
+get_float_value(FILE *fd);
+
+static int64_t
+get_signed_long_long(FILE *fd);
+
+static uint64_t 
+get_unsigned_long_long(FILE *fd);
+
+static PyObject *
+get_signed_long_value(FILE *fd);
+
+static unsigned char
+get_byte(FILE *fd);
+
+static unsigned char
+get_and_validate_field_typecode(FILE *fd);
+
+static unsigned char 
+get_and_validate_stream_typecode(FILE *fd);
+
+static uint32_t 
+get_handle(FILE *fd);
+
+
+
 
 /* unit tests */
 

@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include "javatype.h"
 
+typedef void * object;
+
+
 Handles *
 Handles_New(size_t size)
 {
