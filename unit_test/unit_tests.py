@@ -242,10 +242,70 @@ class TestComplexClassStructures(unittest.TestCase):
                 'age': 13,
                 'siblings': [],
                 'array': [0]*10
-            }]
+            },
+            {
+                'firstName': 'ashley',
+                'lastName': 'mcnamara',
+                'ssn': 9823702,
+                'age': 22,
+                'siblings': [],
+                'array': [0]*10
+            },
+            
+            ]
         }
         self.maxDiff = None
         self.assertDictEqual(from_file, expected)
+
+    def test_super_class_parser(self):
+
+        filename = "object_w_parent_class.ser"
+        from_file = stream_read(filename)
+        expected = {
+            'firstName': 'jim',
+            'lastName': 'beam',
+            'ssn': 83838,
+            'age': 33,
+            'array': [0]*10,
+            'siblings': [],
+            'salary': 94399.00,
+            'address': "2222 Aberdeen Dr. Mount Laurel, NJ 08054"
+        }
+
+        self.assertDictEqual(from_file, expected)
+
+    def test_2_level_hierarchy(self):
+        filename = "object_w_parent_class_with_parent_class.ser"
+        from_file = stream_read(filename)
+        expected = {
+            'firstName': 'michael',
+            'lastName': 'scott',
+            'ssn': 9393920,
+            'age': 29,
+            'array': [0]*10,
+            'siblings': [],
+            'coworkers': [],
+            'salary': 101022.00,
+            'address': "2340 Aberdeen Dr. Mount Laurel, NJ 08054",
+            'yearEndBonus': 0.0,
+            'project': 'AWS'
+        }
+
+        self.assertDictEqual(from_file, expected)
+
+    def test_aggragate_class_in_arraylist(self):
+        filename = "object_w_parent_class_and_arraylist_aggregate.ser"
+        from_file = stream_read(filename)
+        print()
+        print()
+        pprint(from_file)
+
+    def test_overloaded_privates(self):
+        filename = "object_w_parent_class_with_parent_class_w_privates.ser"
+        from_file = stream_read(filename)
+        print()
+        print()
+        pprint(from_file)
 
 class ContainerUnitTest(unittest.TestCase):
 
@@ -340,8 +400,6 @@ class ContainerUnitTest(unittest.TestCase):
             'hashSet': set(),
             'queue': [0, 1, 16, 81, 256]
         }  
-        pprint(from_file)
-
         self.assertDictEqual(from_file, expected)
 
 

@@ -60,6 +60,7 @@ java_stream_reader(PyObject *self, PyObject *args)
     }
 
     FILE *fd = fopen(filename, "rb");
+    assert(fd != NULL);
 
     uint16_t magic_number = get_unsigned_short(fd);
     uint16_t version = get_unsigned_short(fd);
@@ -397,10 +398,43 @@ get_values_class_desc(FILE *fd, Handles *handles, JavaType_Type *class_desc)
     // char sc_externalizable = class_desc->flags.sc_externalizable;
     // char sc_block_data = class_desc->flags.sc_block_data;
     char c;
-    PyObject *data, *value;
+    PyObject *data, *value, *super;
     JavaType_Type *field = NULL;
     
     data = PyDict_New();
+    
+    /* I think superclass descriptors come first in this scenario because
+    the would have been the last item parsed from the stream. */
+
+    if (class_desc->super != NULL){
+        /* update won't be good enough. It should be, but incase a programmer used
+         * private member variables that they rewrote in the child class, this could 
+         * drop data on the floor
+         *
+         * The best thing to do would probably be to iterate over the returned super
+         * class dictionary and add everything into 'data' one at a time checking to see
+         * if the field is already in the dictionary. If it is, it should just go in as 
+         * Class.field. The only issue that this might create is if there is a parent class
+         * two levels update that merges its value into its child class (the parent class of
+         * this class) and then the names conflict at that merge, at which point we would
+         * have already lost the parent class name.
+         * 
+         * possible solutions
+         * ------------------
+         *     <classname>.<fieldname> for collisions: won't work for a collision between a parents parent class
+         *     super.<fieldname>: kind of ugly, but a no fail solution.
+         * 
+         * Bottom line is if using this reader to just pull data, the data is better when it's flatter
+         *
+         * */
+        super = get_values_class_desc(fd, handles, class_desc->super);
+        
+        /* needs to be broken out into a function because 
+        it will also have to be done for the regular part of the class */
+    }
+    else {
+        super = NULL;
+    }
 
     if (sc_serializable) {
         if (class_desc->n_fields == 1 
@@ -428,11 +462,38 @@ get_values_class_desc(FILE *fd, Handles *handles, JavaType_Type *class_desc)
                 assert(strchr("BCDFIJSZL[", field->jt_type) != NULL); 
                 value = get_value(fd, handles, field->jt_type);
 
-
+                /* check if key is in data because of super */
                 PyDict_SetItemString(data, field->fieldname, value);
 
                 Py_DECREF(value); /* dictionary owns the value */
 
+            }
+
+            /* add in super */
+            PyObject *key, *item;
+            Py_ssize_t position = 0;
+            if (super != NULL){
+                while(PyDict_Next(super, &position, &key, &item)){
+
+                    switch(PyDict_Contains(data, key)){
+                    case 1: {/* contains key */
+                        PyObject *_super = PyUnicode_FromString("super.");
+                        PyObject *k = PyUnicode_Concat(_super, key);
+                        PyObject_Print(k, stderr, 0); printf("\n");
+                        PyDict_SetItem(data, k, item);
+                        Py_DECREF(_super);
+                        Py_DECREF(key);
+                        Py_DECREF(k);
+                        break;
+                    }
+                    case -1: /* -1 means error, so I don't know */
+                    case  0: {
+                        PyDict_SetItem(data, key, item);
+                        Py_DECREF(key);
+                        Py_DECREF(item);
+                        break;
+                    }}
+                }
             }
         }
 
